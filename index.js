@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const ccxt = require('ccxt');
-const TelegramBot = require('node-telegram-bot-api');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 require('dotenv').config();
 
 class CryptoScalpingBot {
@@ -15,9 +15,16 @@ class CryptoScalpingBot {
         this.app.use(express.json());
         this.app.use(express.static('public'));
         
-        // Initialize Telegram bot
-        this.telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
-        this.chatId = process.env.TELEGRAM_CHAT_ID;
+        // Initialize Discord bot
+        this.discordBot = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildMessages,
+                GatewayIntentBits.MessageContent
+            ]
+        });
+        this.channelId = process.env.DISCORD_CHANNEL_ID;
+        this.discordReady = false;
         
         // Initialize exchange (Binance)
         this.exchange = new ccxt.binanceusdm();
@@ -46,10 +53,47 @@ class CryptoScalpingBot {
         };
         this.intervalId = null;
         
+        // Setup Discord bot events
+        this.setupDiscordBot();
+        
         // Setup routes
         this.setupRoutes();
         
-        console.log('🤖 Crypto Scalping Bot with Express.js initialized');
+        console.log('🤖 Crypto Scalping Bot with Discord integration initialized');
+    }
+    
+    // Setup Discord bot events
+    setupDiscordBot() {
+        this.discordBot.once('ready', () => {
+            console.log(`✅ Discord bot connected: ${this.discordBot.user.tag}`);
+            this.discordReady = true;
+        });
+        
+        this.discordBot.on('error', (error) => {
+            console.error('❌ Discord bot error:', error);
+        });
+        
+        // Optional: Add slash commands or message commands
+        this.discordBot.on('messageCreate', async (message) => {
+            if (message.author.bot) return;
+            
+            if (message.content === '!bot-status') {
+                const embed = new EmbedBuilder()
+                    .setTitle('🤖 Crypto Scalping Bot Status')
+                    .setColor(this.config.isActive ? 0x00FF00 : 0xFF0000)
+                    .addFields(
+                        { name: 'Status', value: this.config.isActive ? '🟢 Active' : '🔴 Inactive', inline: true },
+                        { name: 'Symbol', value: this.config.symbol, inline: true },
+                        { name: 'Timeframe', value: this.config.timeframe, inline: true },
+                        { name: 'Total Signals', value: this.stats.totalSignals.toString(), inline: true },
+                        { name: 'Buy Signals', value: this.stats.buySignals.toString(), inline: true },
+                        { name: 'Sell Signals', value: this.stats.sellSignals.toString(), inline: true }
+                    )
+                    .setTimestamp();
+                
+                await message.reply({ embeds: [embed] });
+            }
+        });
     }
     
     // Setup Express routes
@@ -70,30 +114,31 @@ class CryptoScalpingBot {
         .header { text-align: center; margin-bottom: 30px; }
         .status { display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
         .card { background: #2d2d2d; padding: 20px; border-radius: 10px; flex: 1; min-width: 250px; }
-        .card h3 { color: #4CAF50; margin-bottom: 10px; }
+        .card h3 { color: #5865F2; margin-bottom: 10px; }
         .controls { display: flex; gap: 10px; margin-bottom: 30px; flex-wrap: wrap; }
         .btn { padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; transition: all 0.3s; }
-        .btn-primary { background: #4CAF50; color: white; }
-        .btn-danger { background: #f44336; color: white; }
+        .btn-primary { background: #5865F2; color: white; }
+        .btn-danger { background: #ED4245; color: white; }
         .btn:hover { opacity: 0.8; transform: translateY(-2px); }
         .signals { margin-top: 30px; }
         .signal { background: #2d2d2d; margin: 10px 0; padding: 15px; border-radius: 5px; border-left: 4px solid; }
-        .signal.buy { border-left-color: #4CAF50; }
-        .signal.sell { border-left-color: #f44336; }
+        .signal.buy { border-left-color: #57F287; }
+        .signal.sell { border-left-color: #ED4245; }
         .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
-        .status-active { background: #4CAF50; }
-        .status-inactive { background: #f44336; }
+        .status-active { background: #57F287; }
+        .status-inactive { background: #ED4245; }
         .config-form { background: #2d2d2d; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 5px; color: #ccc; }
         .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #555; background: #1a1a1a; color: #fff; border-radius: 4px; }
+        .discord-badge { background: #5865F2; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; margin-left: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 Crypto Scalping Bot Dashboard</h1>
-            <p>Real-time monitoring and control</p>
+            <h1>🤖 Crypto Scalping Bot Dashboard <span class="discord-badge">Discord Bot</span></h1>
+            <p>Real-time monitoring and control with Discord notifications</p>
         </div>
         
         <div class="status" id="status">
@@ -102,6 +147,7 @@ class CryptoScalpingBot {
                 <p><span class="status-indicator" id="statusIndicator"></span><span id="botStatus">Loading...</span></p>
                 <p><strong>Symbol:</strong> <span id="symbol">-</span></p>
                 <p><strong>Timeframe:</strong> <span id="timeframe">-</span></p>
+                <p><strong>Discord:</strong> <span id="discordStatus">Connecting...</span></p>
             </div>
             <div class="card">
                 <h3>Statistics</h3>
@@ -225,6 +271,7 @@ class CryptoScalpingBot {
             document.getElementById('statusIndicator').className = 'status-indicator ' + (data.isActive ? 'status-active' : 'status-inactive');
             document.getElementById('symbol').textContent = data.symbol || '-';
             document.getElementById('timeframe').textContent = data.timeframe || '-';
+            document.getElementById('discordStatus').textContent = data.discordReady ? '🟢 Connected' : '🔴 Disconnected';
             document.getElementById('totalSignals').textContent = data.stats.totalSignals || 0;
             document.getElementById('buySignals').textContent = data.stats.buySignals || 0;
             document.getElementById('sellSignals').textContent = data.stats.sellSignals || 0;
@@ -274,7 +321,8 @@ class CryptoScalpingBot {
                 stats: this.stats,
                 currentPrice: this.currentPrice,
                 ma1: this.ma1,
-                ma2: this.ma2
+                ma2: this.ma2,
+                discordReady: this.discordReady
             });
         });
         
@@ -408,41 +456,49 @@ class CryptoScalpingBot {
         };
     }
     
-    // Send Telegram alert
-    async sendTelegramAlert(signal) {
+    // Send Discord alert
+    async sendDiscordAlert(signal) {
         try {
+            if (!this.discordReady || !this.channelId) {
+                console.log('⚠️ Discord not ready or channel ID not configured');
+                return;
+            }
+            
+            const channel = await this.discordBot.channels.fetch(this.channelId);
+            if (!channel) {
+                console.error('❌ Discord channel not found');
+                return;
+            }
+            
             const { type, entryPrice, stopLoss, takeProfit, ma1, ma2, timestamp } = signal;
             
+            const color = type === 'BUY' ? 0x57F287 : 0xED4245; // Green for BUY, Red for SELL
             const emoji = type === 'BUY' ? '🟢' : '🔴';
             const direction = type === 'BUY' ? '📈' : '📉';
             
-            const message = `
-${emoji} **CRYPTO SCALPING SIGNAL** ${emoji}
-
-${direction} **${type} SIGNAL**
-💰 **Pair:** ${this.config.symbol}
-⏰ **Time:** ${new Date(timestamp).toLocaleString()}
-
-📊 **Entry Price:** $${entryPrice.toFixed(6)}
-🎯 **Take Profit:** $${takeProfit.toFixed(6)}
-🛑 **Stop Loss:** $${stopLoss.toFixed(6)}
-
-📈 **MA(${this.config.ma1Period}):** ${ma1.toFixed(6)}
-📉 **MA(${this.config.ma2Period}):** ${ma2.toFixed(6)}
-
-💡 **Risk/Reward:** 1:${this.config.riskRewardRatio}
-📊 **Timeframe:** ${this.config.timeframe}
-
-⚡ *Trade at your own risk!*
-            `.trim();
+            const embed = new EmbedBuilder()
+                .setTitle(`${emoji} CRYPTO SCALPING SIGNAL`)
+                .setDescription(`${direction} **${type} SIGNAL DETECTED**`)
+                .setColor(color)
+                .addFields(
+                    { name: '💰 Trading Pair', value: this.config.symbol, inline: true },
+                    { name: '⏰ Timeframe', value: this.config.timeframe, inline: true },
+                    { name: '📊 Entry Price', value: `$${entryPrice.toFixed(6)}`, inline: true },
+                    { name: '🎯 Take Profit', value: `$${takeProfit.toFixed(6)}`, inline: true },
+                    { name: '🛑 Stop Loss', value: `$${stopLoss.toFixed(6)}`, inline: true },
+                    { name: '💡 Risk/Reward', value: `1:${this.config.riskRewardRatio}`, inline: true },
+                    { name: `📈 MA(${this.config.ma1Period})`, value: ma1.toFixed(6), inline: true },
+                    { name: `📉 MA(${this.config.ma2Period})`, value: ma2.toFixed(6), inline: true },
+                    { name: '⚡ Risk Warning', value: 'Trade at your own risk!', inline: false }
+                )
+                .setTimestamp(new Date(timestamp))
+                .setFooter({ text: 'Crypto Scalping Bot', iconURL: 'https://cdn.discordapp.com/attachments/123456789/bot-icon.png' });
             
-            if (this.telegramBot && this.chatId) {
-                await this.telegramBot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-                console.log(`📱 Telegram alert sent: ${type} signal for ${this.config.symbol}`);
-            }
+            await channel.send({ embeds: [embed] });
+            console.log(`🎯 Discord alert sent: ${type} signal for ${this.config.symbol}`);
             
         } catch (error) {
-            console.error('❌ Error sending Telegram message:', error.message);
+            console.error('❌ Error sending Discord message:', error.message);
         }
     }
     
@@ -514,7 +570,7 @@ ${direction} **${type} SIGNAL**
                     timestamp: currentTime
                 };
                 
-                await this.sendTelegramAlert(signal);
+                await this.sendDiscordAlert(signal);
                 
                 this.lastSignal = signal;
                 this.signals.push(signal);
@@ -542,20 +598,25 @@ ${direction} **${type} SIGNAL**
             await this.exchange.loadMarkets();
             console.log('✅ Exchange connection established');
             
-            if (this.telegramBot && this.chatId) {
-                const botInfo = await this.telegramBot.getMe();
-                console.log(`✅ Telegram bot connected: @${botInfo.username}`);
+            if (this.discordReady && this.channelId) {
+                const channel = await this.discordBot.channels.fetch(this.channelId);
                 
-                await this.telegramBot.sendMessage(this.chatId, 
-                    `🤖 **Crypto Scalping Bot Started (Express Mode)**\n\n` +
-                    `📊 Monitoring: ${this.config.symbol}\n` +
-                    `⏰ Timeframe: ${this.config.timeframe}\n` +
-                    `📈 Strategy: MA(${this.config.ma1Period}) / MA(${this.config.ma2Period}) Crossover\n` +
-                    `💰 Risk/Reward: 1:${this.config.riskRewardRatio}\n` +
-                    `🌐 Dashboard: http://localhost:${this.port}\n\n` +
-                    `🔄 Checking market every ${this.config.checkInterval / 1000} seconds...`,
-                    { parse_mode: 'Markdown' }
-                );
+                const embed = new EmbedBuilder()
+                    .setTitle('🤖 Crypto Scalping Bot Started')
+                    .setDescription('Bot is now monitoring the market for trading signals')
+                    .setColor(0x57F287)
+                    .addFields(
+                        { name: '📊 Monitoring', value: this.config.symbol, inline: true },
+                        { name: '⏰ Timeframe', value: this.config.timeframe, inline: true },
+                        { name: '📈 Strategy', value: `MA(${this.config.ma1Period}) / MA(${this.config.ma2Period}) Crossover`, inline: false },
+                        { name: '💰 Risk/Reward', value: `1:${this.config.riskRewardRatio}`, inline: true },
+                        { name: '🌐 Dashboard', value: `http://localhost:${this.port}`, inline: true },
+                        { name: '🔄 Check Interval', value: `${this.config.checkInterval / 1000} seconds`, inline: true }
+                    )
+                    .setTimestamp()
+                    .setFooter({ text: 'Bot started successfully' });
+                
+                await channel.send({ embeds: [embed] });
             }
             
             this.config.isActive = true;
@@ -585,8 +646,17 @@ ${direction} **${type} SIGNAL**
                 this.intervalId = null;
             }
             
-            if (this.telegramBot && this.chatId) {
-                await this.telegramBot.sendMessage(this.chatId, '🛑 **Crypto Scalping Bot Stopped**', { parse_mode: 'Markdown' });
+            if (this.discordReady && this.channelId) {
+                const channel = await this.discordBot.channels.fetch(this.channelId);
+                
+                const embed = new EmbedBuilder()
+                    .setTitle('🛑 Crypto Scalping Bot Stopped')
+                    .setDescription('Bot has been stopped and is no longer monitoring the market')
+                    .setColor(0xED4245)
+                    .setTimestamp()
+                    .setFooter({ text: 'Bot stopped' });
+                
+                await channel.send({ embeds: [embed] });
             }
             
             console.log('🛑 Bot stopped gracefully');
@@ -601,12 +671,16 @@ ${direction} **${type} SIGNAL**
     async startServer() {
         try {
             // Validate environment variables
-            const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+            const requiredEnvVars = ['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID'];
             const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
             
             if (missingVars.length > 0) {
-                console.warn('⚠️ Missing Telegram variables:', missingVars.join(', '));
-                console.log('Bot will run without Telegram notifications');
+                console.warn('⚠️ Missing Discord variables:', missingVars.join(', '));
+                console.log('Bot will run without Discord notifications');
+            } else {
+                // Login Discord bot
+                await this.discordBot.login(process.env.DISCORD_BOT_TOKEN);
+                console.log('✅ Discord bot login initiated');
             }
             
             // Test exchange connection
